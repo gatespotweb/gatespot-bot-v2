@@ -1,4 +1,5 @@
 import os
+import json
 import logging
 import datetime
 import requests
@@ -28,9 +29,38 @@ VILLES = {
 }
 
 CATEGORIES_DEPENSE = ["Maintenance", "Electricite", "Eau", "Consommables", "Menage", "Autre"]
-CATEGORIES_REVENU = ["Cash"]
 
 user_data_store = {}
+
+
+def envoyer_vers_sheets(payload):
+    """Envoie les données vers Google Sheets via le Web App."""
+    if not WEBAPP_URL:
+        return "URL Web App non configuree"
+    try:
+        # Google Apps Script redirige les POST (302)
+        # On envoie sans suivre la redirection d'abord
+        resp = requests.post(
+            WEBAPP_URL,
+            data=json.dumps(payload),
+            headers={"Content-Type": "application/json"},
+            allow_redirects=False,
+            timeout=15
+        )
+        # Si redirection, suivre avec POST (pas GET)
+        if resp.status_code in (301, 302, 303, 307, 308):
+            redirect_url = resp.headers.get("Location")
+            if redirect_url:
+                resp = requests.post(
+                    redirect_url,
+                    data=json.dumps(payload),
+                    headers={"Content-Type": "application/json"},
+                    timeout=15
+                )
+        return "Enregistre dans Google Sheets !"
+    except Exception as e:
+        logging.error("Erreur envoi Sheets: " + str(e))
+        return "Erreur d'envoi: " + str(e)
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -51,7 +81,6 @@ async def type_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = query.from_user.id
     user_data_store[user_id] = {"type": query.data.replace("type_", "")}
 
-    # Afficher les appartements
     keyboard = []
     for ville, apparts in APPARTEMENTS.items():
         keyboard.append([InlineKeyboardButton("--- " + ville + " ---", callback_data="ville_" + ville)])
@@ -87,7 +116,6 @@ async def appartement_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
     type_op = user_data_store[user_id]["type"]
 
     if type_op == "depense":
-        # Afficher les catégories de dépense
         categories = CATEGORIES_DEPENSE
         keyboard = []
         row = []
@@ -105,7 +133,6 @@ async def appartement_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
         )
         return CATEGORIE
     else:
-        # Revenu cash → demander le nom du client
         user_data_store[user_id]["categorie"] = "Cash"
         await query.edit_message_text(
             appart + " - Revenu Cash\n\nNom du client ?"
@@ -211,18 +238,7 @@ async def enregistrer(update, user_id):
             "notes": data.get("description", "")
         }
 
-    status = ""
-    if WEBAPP_URL:
-        try:
-            resp = requests.post(WEBAPP_URL, json=payload, timeout=15)
-            if resp.status_code == 200:
-                status = "Enregistre dans Google Sheets !"
-            else:
-                status = "Erreur: " + str(resp.status_code)
-        except Exception as e:
-            status = "Erreur d'envoi: " + str(e)
-    else:
-        status = "URL Web App non configuree"
+    status = envoyer_vers_sheets(payload)
 
     if type_op == "revenu":
         message = (
