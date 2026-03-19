@@ -8,9 +8,10 @@ from telegram.ext import Application, CommandHandler, CallbackQueryHandler, Mess
 logging.basicConfig(level=logging.INFO)
 
 TOKEN = os.environ.get("TELEGRAM_TOKEN")
-MAKE_WEBHOOK_URL = os.environ.get("MAKE_WEBHOOK_URL", "")
+WEBAPP_URL = os.environ.get("WEBAPP_URL", "")
 
-TYPE, APPARTEMENT, CATEGORIE, DESCRIPTION, MONTANT = range(5)
+# États de la conversation
+TYPE, APPARTEMENT, CATEGORIE, CLIENT, NUITS, DESCRIPTION, MONTANT = range(7)
 
 APPARTEMENTS = {
     "Casablanca": ["Anfa City", "Anfa 212", "Tour 33", "Gauthier"],
@@ -27,9 +28,10 @@ VILLES = {
 }
 
 CATEGORIES_DEPENSE = ["Maintenance", "Electricite", "Eau", "Consommables", "Menage", "Autre"]
-CATEGORIES_REVENU = ["Airbnb", "Cash"]
+CATEGORIES_REVENU = ["Cash"]
 
 user_data_store = {}
+
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
@@ -42,12 +44,14 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     return TYPE
 
+
 async def type_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     user_id = query.from_user.id
     user_data_store[user_id] = {"type": query.data.replace("type_", "")}
 
+    # Afficher les appartements
     keyboard = []
     for ville, apparts in APPARTEMENTS.items():
         keyboard.append([InlineKeyboardButton("--- " + ville + " ---", callback_data="ville_" + ville)])
@@ -67,9 +71,11 @@ async def type_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     return APPARTEMENT
 
+
 async def appartement_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
+
     if query.data.startswith("ville_"):
         return APPARTEMENT
 
@@ -79,42 +85,82 @@ async def appartement_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
     user_data_store[user_id]["ville"] = VILLES[appart]
 
     type_op = user_data_store[user_id]["type"]
-    categories = CATEGORIES_DEPENSE if type_op == "depense" else CATEGORIES_REVENU
 
-    keyboard = []
-    row = []
-    for cat in categories:
-        row.append(InlineKeyboardButton(cat, callback_data="cat_" + cat))
-        if len(row) == 2:
+    if type_op == "depense":
+        # Afficher les catégories de dépense
+        categories = CATEGORIES_DEPENSE
+        keyboard = []
+        row = []
+        for cat in categories:
+            row.append(InlineKeyboardButton(cat, callback_data="cat_" + cat))
+            if len(row) == 2:
+                keyboard.append(row)
+                row = []
+        if row:
             keyboard.append(row)
-            row = []
-    if row:
-        keyboard.append(row)
 
-    await query.edit_message_text(
-        appart + " - Categorie ?",
-        reply_markup=InlineKeyboardMarkup(keyboard)
-    )
-    return CATEGORIE
+        await query.edit_message_text(
+            appart + " - Categorie ?",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+        return CATEGORIE
+    else:
+        # Revenu cash → demander le nom du client
+        user_data_store[user_id]["categorie"] = "Cash"
+        await query.edit_message_text(
+            appart + " - Revenu Cash\n\nNom du client ?"
+        )
+        return CLIENT
+
 
 async def categorie_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     user_id = query.from_user.id
     user_data_store[user_id]["categorie"] = query.data.replace("cat_", "")
-
     appart = user_data_store[user_id]["appartement"]
     cat = user_data_store[user_id]["categorie"]
 
     await query.edit_message_text(
-        appart + " - " + cat + "\n\nDecris en quelques mots :\n(ex: reparation clim, capsules cafe, nuit du 15 mars...)"
+        appart + " - " + cat + "\n\nDecris en quelques mots :\n(ex: reparation clim, capsules cafe...)"
     )
     return DESCRIPTION
+
+
+async def client_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.message.from_user.id
+    user_data_store[user_id]["client"] = update.message.text.strip()
+    appart = user_data_store[user_id]["appartement"]
+    client = user_data_store[user_id]["client"]
+
+    await update.message.reply_text(
+        appart + " - " + client + "\n\nCombien de nuits ?"
+    )
+    return NUITS
+
+
+async def nuits_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.message.from_user.id
+    nuits_text = update.message.text.strip()
+
+    if not nuits_text.isdigit():
+        await update.message.reply_text("Nombre invalide ! Tape un nombre (ex: 3)")
+        return NUITS
+
+    user_data_store[user_id]["nuits"] = int(nuits_text)
+    appart = user_data_store[user_id]["appartement"]
+    client = user_data_store[user_id]["client"]
+    nuits = user_data_store[user_id]["nuits"]
+
+    await update.message.reply_text(
+        appart + " - " + client + " - " + str(nuits) + " nuits\n\nMontant total en DH ?"
+    )
+    return MONTANT
+
 
 async def description_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
     user_data_store[user_id]["description"] = update.message.text.strip()
-
     appart = user_data_store[user_id]["appartement"]
     cat = user_data_store[user_id]["categorie"]
     desc = user_data_store[user_id]["description"]
@@ -123,6 +169,7 @@ async def description_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
         appart + " - " + cat + " - " + desc + "\n\nMontant en DH ?"
     )
     return MONTANT
+
 
 async def montant_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
@@ -135,42 +182,68 @@ async def montant_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_data_store[user_id]["montant"] = montant
     return await enregistrer(update, user_id)
 
+
 async def enregistrer(update, user_id):
     data = user_data_store.get(user_id, {})
     type_op = data.get("type")
 
-    payload = {
-        "date": str(datetime.date.today()),
-        "appartement": data.get("appartement"),
-        "ville": data.get("ville"),
-        "categorie": data.get("categorie"),
-        "montant": data.get("montant"),
-        "notes": data.get("description"),
-        "type": type_op
-    }
+    if type_op == "revenu":
+        payload = {
+            "type": "revenu",
+            "date": str(datetime.date.today()),
+            "appartement": data.get("appartement"),
+            "ville": data.get("ville"),
+            "client": data.get("client", ""),
+            "nuits": data.get("nuits", ""),
+            "revenu_nuits": data.get("montant"),
+            "menage": 0,
+            "montant": data.get("montant"),
+            "notes": "Revenu Cash"
+        }
+    else:
+        payload = {
+            "type": "depense",
+            "date": str(datetime.date.today()),
+            "appartement": data.get("appartement"),
+            "ville": data.get("ville"),
+            "categorie": data.get("categorie"),
+            "montant": data.get("montant"),
+            "notes": data.get("description", "")
+        }
 
     status = ""
-    if MAKE_WEBHOOK_URL:
+    if WEBAPP_URL:
         try:
-            requests.post(MAKE_WEBHOOK_URL, json=payload, timeout=10)
-            status = "Enregistre dans Google Sheets !"
+            resp = requests.post(WEBAPP_URL, json=payload, timeout=15)
+            if resp.status_code == 200:
+                status = "Enregistre dans Google Sheets !"
+            else:
+                status = "Erreur: " + str(resp.status_code)
         except Exception as e:
             status = "Erreur d'envoi: " + str(e)
     else:
-        status = "Webhook Make non configure"
+        status = "URL Web App non configuree"
 
-    type_label = "Depense" if type_op == "depense" else "Revenu"
-    message = (
-        type_label + " enregistree !\n\n"
-        "Appartement: " + str(data.get("appartement")) + " (" + str(data.get("ville")) + ")\n"
-        "Categorie: " + str(data.get("categorie")) + "\n"
-        "Description: " + str(data.get("description")) + "\n"
-        "Montant: " + str(data.get("montant")) + " DH\n\n"
-        + status
-    )
+    if type_op == "revenu":
+        message = (
+            "Revenu enregistre !\n\n"
+            "Appartement: " + str(data.get("appartement")) + " (" + str(data.get("ville")) + ")\n"
+            "Client: " + str(data.get("client")) + "\n"
+            "Nuits: " + str(data.get("nuits")) + "\n"
+            "Montant: " + str(data.get("montant")) + " DH\n\n"
+            + status
+        )
+    else:
+        message = (
+            "Depense enregistree !\n\n"
+            "Appartement: " + str(data.get("appartement")) + " (" + str(data.get("ville")) + ")\n"
+            "Categorie: " + str(data.get("categorie")) + "\n"
+            "Description: " + str(data.get("description", "")) + "\n"
+            "Montant: " + str(data.get("montant")) + " DH\n\n"
+            + status
+        )
 
     keyboard = [[InlineKeyboardButton("Nouvelle saisie", callback_data="restart")]]
-
     await update.message.reply_text(
         message,
         reply_markup=InlineKeyboardMarkup(keyboard)
@@ -178,6 +251,7 @@ async def enregistrer(update, user_id):
 
     user_data_store.pop(user_id, None)
     return ConversationHandler.END
+
 
 async def restart(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -192,9 +266,11 @@ async def restart(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     return TYPE
 
+
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Annule. Tape /start pour recommencer.")
     return ConversationHandler.END
+
 
 def main():
     app = Application.builder().token(TOKEN).build()
@@ -211,6 +287,8 @@ def main():
                 CallbackQueryHandler(appartement_handler, pattern="^ville_")
             ],
             CATEGORIE: [CallbackQueryHandler(categorie_handler, pattern="^cat_")],
+            CLIENT: [MessageHandler(filters.TEXT & ~filters.COMMAND, client_handler)],
+            NUITS: [MessageHandler(filters.TEXT & ~filters.COMMAND, nuits_handler)],
             DESCRIPTION: [MessageHandler(filters.TEXT & ~filters.COMMAND, description_handler)],
             MONTANT: [MessageHandler(filters.TEXT & ~filters.COMMAND, montant_handler)],
         },
@@ -219,8 +297,9 @@ def main():
     )
 
     app.add_handler(conv_handler)
-    print("Gatespot Bot demarre !")
+    print("Gatespot Bot v3 demarre !")
     app.run_polling(drop_pending_updates=True)
+
 
 if __name__ == "__main__":
     main()
